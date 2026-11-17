@@ -337,6 +337,8 @@ test('ASMO and undo are admin-only item actions', async () => {
   assert.throws(() => guardAction({ role: 'seller', seller: 'ada' }, 'asmowbw'), /Only an admin can do that/);
   assert.throws(() => guardAction({ role: 'seller', seller: 'ada' }, 'asmowbw-undo'), /Only an admin can do that/);
   assert.equal(guardAction({ role: 'admin' }, 'asmowbw'), undefined);
+  assert.equal(ADMIN_ACTIONS.includes('asmowbw-apply'), true);
+  assert.throws(() => guardAction({ role: 'seller', seller: 'ada' }, 'asmowbw-apply'), /Only an admin can do that/);
 
   const item = lucchese();
   const db = {
