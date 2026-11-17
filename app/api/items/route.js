@@ -2,6 +2,8 @@ import { itemsResponse } from '../../../lib/items-api';
 import * as wbw from '../../../lib/wbw';
 
 export const dynamic = 'force-dynamic';
+// One-click AMCASO WBW reads and stores up to 30 full-size photos per pair.
+export const maxDuration = 60;
 
 const db = {
   getItems: wbw.getItems,
@@ -24,6 +26,8 @@ const db = {
   acceptStyleCandidate: wbw.acceptStyleCandidate,
   runAmcasowbw: wbw.runAmcasowbw,
   undoAmcasowbw: wbw.undoAmcasowbw,
+  applyAmcasowbwResult: wbw.applyAmcasowbwResult,
+  amcasoWbwOneClick: wbw.amcasoWbwOneClick,
 };
 
 // GET ?status= → that seller's items. POST one listing. PATCH bulk actions.

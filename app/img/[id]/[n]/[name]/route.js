@@ -119,20 +119,25 @@ export async function readSourcePhoto(src, opt = {}) {
   return once(src, 0);
 }
 
-export async function GET(req, { params }) {
-  // The filename in the path is a label. Lookup is id and photo index, so an older name still resolves.
-  const { id, n } = await params;
-  const item = /^\d+$/.test(id) ? await getItem(id) : null, original = item?.photos[n - 1];
+// The bytes WBW gets for photo n of an item. Exported so tests can check the CSV photo end to end.
+export async function photoResponse(item, n, accept = '', read = null) {
+  const original = item?.photos?.[n - 1];
   if (!original) return new Response('Not found', { status: 404 });
-  const amcaso = item ? appliedAmcaso(item) : null;
+  const amcaso = appliedAmcaso(item);
   const im = amcaso?.images?.find(x => x.n === Number(n));
-  const accept = req.headers?.get?.('accept') || '';
   const wantWebp = /\bimage\/webp\b/i.test(accept);
   const src = (wantWebp && im?.webp_url) || im?.jpeg_url || original;
   try {
     // Blob and source photos go through the same checks: public address only, raster image types only, size and time caps.
-    const { body, type } = await readSourcePhoto(src);
+    const { body, type } = await (read ? read(src) : readSourcePhoto(src));
     const out = type === 'image/jpeg' ? withXmp(body, item, +n) : body;
     return new Response(out, { headers: { 'Content-Type': type, ...PHOTO_HEADERS } });
   } catch { return new Response('Not found', { status: 404 }); }
+}
+
+export async function GET(req, { params }) {
+  // The filename in the path is a label. Lookup is id and photo index, so an older name still resolves.
+  const { id, n } = await params;
+  const item = /^\d+$/.test(id) ? await getItem(id) : null;
+  return photoResponse(item, +n, req.headers?.get?.('accept') || '');
 }

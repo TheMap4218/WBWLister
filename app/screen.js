@@ -193,34 +193,35 @@ export default function Screen({ admin = false }) {
       .catch(e => setErr(e.message))
       .finally(() => setOptBusy(false));
   };
+  // One click: amcasoWBW runs on the server for each pair, the prepared photos become the pair's photos, and the
+  // CSV export then hands WBW those photos with title, description, and keywords inside. One request per pair.
   const runAmcaso = async ids => {
-    if (!ids?.length) return setErr('Nothing to run AMCASO on.');
+    if (!ids?.length) return setErr('Select at least one pair for AMCASO WBW.');
     setErr('');
-    setRunState({ label: 'AMCASO…', done: 0, total: ids.length, busy: true });
-    let done = 0, optimized = 0, failed = 0, skipped = 0, photos = 0;
-    try {
-      for (let i = 0; i < ids.length; i += 1) {
-        const part = await api('PATCH', { action: 'amcasowbw', ids: [ids[i]] });
-        done += part.processed || 1;
-        optimized += part.optimized || 0;
-        failed += part.failed || 0;
-        skipped += part.skipped || 0;
-        photos += part.photos || 0;
-        setRun({ done, total: ids.length, label: `AMCASO: ${optimized} updated${failed ? `, ${failed} failed` : ''}` });
-      }
-      setRunState({
-        label: `AMCASO finished: ${optimized} listing(s) updated, ${photos} photo(s) named${failed ? `, ${failed} failed` : ''}${skipped ? `, ${skipped} skipped` : ''}. Original photos kept. Titles, descriptions, prices, and sizes were not changed.`,
-      });
-      setSel(new Set());
-      load();
-    } catch (e) { setRunState(null); setErr(e.message); }
+    setRunState({ label: 'AMCASO WBW', done: 0, total: ids.length, busy: true });
+    const done = [], fails = [];
+    for (const id of ids) {
+      try {
+        const r = await api('PATCH', { action: 'amcasowbw-oneclick', ids: [id] });
+        for (const x of r.results ?? []) (x.ok ? done : fails).push(x);
+      } catch (e) { fails.push({ id, error: e.message }); }
+      const applied = done.filter(x => x.status === 'applied').length;
+      setRun({ done: done.length + fails.length, label: `AMCASO WBW: ${applied} ready${fails.length ? `, ${fails.length} failed` : ''}` });
+    }
+    const applied = done.filter(x => x.status === 'applied').length, current = done.length - applied;
+    const warned = done.filter(x => x.warnings?.length).length;
+    const name = id => items.find(i => i.id === id)?.title || `#${id}`;
+    setRunState({ label: `AMCASO WBW finished: ${applied} pair(s) ready for CSV export${current ? `, ${current} already up to date` : ''}${warned ? `, ${warned} with photo warnings` : ''}${fails.length ? `, ${fails.length} failed` : ''}. Original photos kept for Undo.` });
+    if (fails.length) setErr(`AMCASO WBW failed for: ${fails.map(f => `${name(f.id)} (${f.error})`).join('; ')}`);
+    setSel(new Set());
+    load();
   };
   const undoAmcaso = async ids => {
-    if (!ids?.length) return setErr('Select at least one item to undo AMCASO.');
+    if (!ids?.length) return setErr('Select at least one pair to undo AMCASO WBW.');
     setErr('');
     try {
       const r = await api('PATCH', { action: 'amcasowbw-undo', ids });
-      setRunState({ label: `AMCASO undo: ${r.undone || 0} listing(s) restored${r.skipped ? `, ${r.skipped} had nothing to undo` : ''}.` });
+      setRunState({ label: `AMCASO WBW undo: ${r.undone || 0} pair(s) back to their original photos${r.skipped ? `, ${r.skipped} had nothing to undo` : ''}.` });
       setSel(new Set());
       load();
     } catch (e) { setErr(e.message); }
@@ -328,10 +329,10 @@ export default function Screen({ admin = false }) {
         {admin && who && <button type="button" onClick={() => act({ action: 'optimize-backfill' })}>Optimize existing</button>}
         {admin && who && <button type="button" data-amcaso disabled={run?.busy} onClick={() => {
           const ids = sel.size ? [...sel] : shown.map(i => i.id);
-          if (!ids.length) return setErr('Nothing to run AMCASO on.');
-          if (!sel.size && !confirm(`Run AMCASO on all ${ids.length} listings in this view? Photo names, alt text, and web-sized copies may change. Titles, descriptions, prices, and sizes stay the same. Original photos are kept.`)) return;
+          if (!ids.length) return setErr('Nothing to run AMCASO WBW on.');
+          if (!sel.size && !confirm(`Run AMCASO WBW on all ${ids.length} pairs in this view? Each pair's photos are replaced by full-size copies with title, description, and keywords written in. Originals are kept, and Undo AMCASO WBW puts them back.`)) return;
           runAmcaso(ids);
-        }}>AMCASO</button>}
+        }}>AMCASO WBW</button>}
         {admin && <a className="src" href="/bootlister-extension-0.19.zip" download title="Needed for Facebook and Depop imports">Chrome extension 0.19{ext ? ' ✓' : ''}</a>}
         {admin && <a className="src" href="/admin/bugs">Bug reports</a>}
         {!admin && <a className="src" href={WBW_ACCOUNT_URL} target="_blank" rel="noopener noreferrer">{WBW_ACCOUNT_LABEL}</a>}
@@ -419,8 +420,8 @@ export default function Screen({ admin = false }) {
           {!live && tab !== 'pending' && <button onClick={() => bulk({ action: 'restore' })}>Restore</button>}
           {admin && <button onClick={scan}>Scan photos for ID info</button>}
           {admin && <button onClick={() => { const to = prompt('Move the selected items to which seller?'); if (to) bulk({ action: 'move', to }); }}>Move to seller…</button>}
-          {admin && <button type="button" data-amcaso disabled={run?.busy} onClick={() => runAmcaso([...sel])}>AMCASO</button>}
-          {admin && <button type="button" data-amcaso-undo disabled={run?.busy} onClick={() => undoAmcaso([...sel])}>Undo AMCASO</button>}
+          {admin && <button type="button" data-amcaso disabled={run?.busy} onClick={() => runAmcaso([...sel])}>AMCASO WBW</button>}
+          {admin && <button type="button" data-amcaso-undo disabled={run?.busy} onClick={() => undoAmcaso([...sel])}>Undo AMCASO WBW</button>}
           {admin && <button onClick={() => confirm(`Delete ${sel.size} items? Their photos and details stay in the WBW photo archive.`) && bulk({ action: 'delete' })}>Delete</button>}
         </>}
       </div>}
@@ -460,7 +461,11 @@ export default function Screen({ admin = false }) {
               {!admin && i.approved_at && <small className="warn">Saving changes takes it off the exported list until you approve it again.</small>}
             </div> : <div className="info" onClick={() => setEdit(i)}>
               <strong>{i.title || 'Untitled'}</strong>
-              {i.asmowbw?.media === 'asmowbw' && <small data-amcaso-applied>AMCASO applied{i.asmowbw.applied_at ? ` ${String(i.asmowbw.applied_at).slice(0, 10)}` : ''}</small>}
+              {i.asmowbw?.media === 'asmowbw' && <small data-amcaso-applied>AMCASO WBW applied{i.asmowbw.applied_at ? ` ${String(i.asmowbw.applied_at).slice(0, 10)}` : ''}{i.asmowbw.warnings?.length ? ` · ${i.asmowbw.warnings.length} photo warning(s)` : ''}</small>}
+              {admin && <span className="amcaso-row" onClick={e => e.stopPropagation()}>
+                <button type="button" data-amcaso-one disabled={run?.busy} onClick={() => runAmcaso([i.id])}>AMCASO WBW</button>
+                {i.asmowbw?.original_photos?.length > 0 && <button type="button" data-amcaso-undo-one disabled={run?.busy} onClick={() => undoAmcaso([i.id])}>Undo AMCASO WBW</button>}
+              </span>}
               {i.source_url && <a className="src" href={i.source_url} target="_blank" onClick={e => e.stopPropagation()}>
                 View on {{ facebook: 'Facebook', depop: 'Depop', poshmark: 'Poshmark', ebay: 'eBay' }[i.source] ?? i.source}</a>}
               {i.source === 'listperfectly' && <small>List Perfectly{i.markets ? ` · listed on ${i.markets}` : ''}</small>}
