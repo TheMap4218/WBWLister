@@ -2,6 +2,16 @@
 
 > AMCASO (All Media Compression And Search Optimization) was called ASMO before Nov 17, 2026. BootLister reads `AMCASO_WBW_*` env vars first and falls back to the older `ASMO_WBW_*` names. The vendored tool (`vendor/asmo-wbw`, Python package `asmo_wbw` v0.2) and `scripts/asmo-wbw-worker.py` keep their old names on purpose: an installed worker already runs from those paths and env vars. The `items.asmowbw` column, `asmowbw/` Blob prefix, and the old `asmowbw*` API actions are kept for compatibility.
 
+## Current: one-click AMCASO WBW runs inside BootLister (Nov 17, 2026)
+
+The **AMCASO WBW** button (per pair, on the selection bar, and in the header for the whole view) needs no Python, no worker, no PC, and no new env vars. `lib/amcaso-wbw-engine.js` and `lib/amcaso-wbw-media.js` are a JavaScript port of amcasoWBW 0.3.2's WBW path (facts, names, copy, and lossless XMP/IPTC writing, EXIF GPS removal, still GIF/BMP to JPEG through `sharp`). `test/amcaso-engine.test.mjs` checks it against the Python tool's own output (`test/fixtures/amcaso-golden/`, regenerate with the Python tool if amcasoWBW changes): names and copy match, and prepared JPEG/PNG/WebP bytes are identical.
+
+Per click and per pair, `lib/amcaso-wbw-oneclick.js` reads the pair's original photos, writes one full-size prepared copy per photo under `prepared/<id>/<n>/`, makes those copies `items.photos`, and keeps the originals in `items.asmowbw.original_photos` for **Undo AMCASO WBW**. A pair that fails (unreadable photo, unsupported file) is listed and nothing is written for it; the other pairs still run. A pair whose prepared photos already match its originals and facts is skipped, so a second click stores nothing new. A fact change re-runs from the originals.
+
+Not ported: pixel view analysis (side/front/sole words in names). Photos are named `-N` and "photo N of M", which is what the Python tool does for any photo it cannot classify with confidence.
+
+The Python worker below is the older path behind the `amcasowbw` API action. The UI no longer uses it.
+
 amcasoWBW v0.2.1 is a local Python CLI (`python -m asmo_wbw run --in listing.json --out-dir out/`). It needs Python 3.11+, Pillow, NumPy, and piexif. It is CPU-only and free. It does not fit comfortably inside a short Vercel serverless request, so the live AMCASO button should call it as a background/sidecar worker.
 
 This PR does not deploy anything, create accounts, or add environment variables. It only documents what a later deploy would need.
