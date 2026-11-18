@@ -502,6 +502,7 @@ export default function Screen({ admin = false }) {
                 <label>Optimized description<textarea readOnly rows="3" value={proposal.optimized_description || ''} /></label>
               </div>}
               {optNote?.id === i.id && <small data-optimize-status>{optNote.text}</small>}
+              {Array.isArray(i.photo_codes) && i.photo_codes.length > 0 && <small className="warn">From photos, not verified: {i.photo_codes.map(c => `${c.text} (${c.type}, photo ${c.photo})`).join('; ')}</small>}
               <dl>
                 {i.missing_group_price && <div className="err"><dt>Missing group price</dt><dd>Spreadsheet price kept</dd></div>}
                 {FIELDS.filter(f => f !== 'title' && f !== 'description' && (i[f] || flagged(i).includes(f) || ['wbw_price', 'price', 'brand', 'sized_for', 'size', 'condition', 'material'].includes(f))).map(f =>
