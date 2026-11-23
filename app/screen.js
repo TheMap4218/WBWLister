@@ -98,6 +98,8 @@ function WbwStatusBadges({ status, where }) {
 // Shared item screen. The admin interface passes admin; the seller interface at /seller does not, so those controls are not rendered.
 export default function Screen({ admin = false }) {
   const [who, setWho] = useState('');
+  const [wbwShipping, setWbwShipping] = useState('');
+  const wbwBusy = useRef(false);
   const [sellers, setSellers] = useState([]);
   const [sellerForm, setSellerForm] = useState(null); // seller being added/edited
   const [inviteCode, setInviteCode] = useState('');
@@ -166,6 +168,42 @@ export default function Screen({ admin = false }) {
       .catch(e => setErr(e.message));
   };
   const scan = async () => { for (const id of sel) await api('POST', { id }, '', '/api/idcheck').catch(e => setErr(e.message)); load(); };
+  const connectWbw = async () => {
+    if (!admin || !who || wbwBusy.current) return;
+    wbwBusy.current = true; setErr(''); setRunState({ label: 'Connecting seller to WBW…', busy: true });
+    try {
+      const result = await api('POST', { action: 'connect' }, '', '/api/wbw');
+      setRunState({ label: `Connected to WBW: ${result.seller.display_name || result.seller.username}.` });
+      await loadSellers();
+    } catch (e) { setErr(e.message); setRunState(null); }
+    finally { wbwBusy.current = false; }
+  };
+  const sendWbw = async (publish = false) => {
+    if (!admin || !who || wbwBusy.current || run?.busy) return;
+    const ids = [...sel];
+    if (!ids.length) return setErr('Select the listings to send to WBW.');
+    if (publish && !wbwShipping) return setErr('Choose the shipping destination before listing on WBW.');
+    wbwBusy.current = true; setErr('');
+    setRunState({ label: 'Connecting seller to WBW…', busy: true, done: 0, total: ids.length });
+    let saved = 0, live = 0; const problems = [];
+    try {
+      await api('POST', { action: 'connect' }, '', '/api/wbw');
+      for (const [at, id] of ids.entries()) {
+        setRunState({ label: `Sending to WBW: ${at + 1} of ${ids.length}`, busy: true, done: at, total: ids.length });
+        try {
+          const result = await api('POST', { action: 'send', ids: [id], publish, shipping: { type: wbwShipping } }, '', '/api/wbw');
+          saved++; if (result.status === 'published') live++;
+          if (result.publication && !result.publication.ok) problems.push(`#${id}: saved as draft. ${result.publication.error}`);
+          if (result.warning) problems.push(`#${id}: ${result.warning}`);
+        } catch (e) { problems.push(`#${id}: ${e.message}`); }
+      }
+      setRunState({ label: `${saved} confirmed on WBW, ${live} live${saved - live ? `, ${saved - live} not live` : ''}. Re-sending the same item checks its existing WBW copy.` });
+      if (problems.length) setErr(problems.join(' '));
+      await load(); await loadSellers();
+    } catch (e) { setErr(e.message); setRunState(null); }
+    finally { wbwBusy.current = false; }
+  };
+
   const exportCsv = async () => {
     const picked = items.filter(i => sel.has(i.id)), rows = picked.filter(i => !needsCheck(i));
     if (!rows.length) return setErr(picked.length ? 'Nothing selected has the seller\'s approval yet.' : 'Select an approved item first.');
@@ -335,6 +373,7 @@ export default function Screen({ admin = false }) {
         </select>
         {who && <button onClick={() => setSellerForm(sellerFormState(hasDetails ? current : { name: who, sync: 'off' }))}>{hasDetails ? 'Seller settings' : 'Set up seller'}</button>}
         {who && hasDetails && <button type="button" onClick={() => setIntakeOpen(true)}>Seller intake</button>}
+        {who && hasDetails && <button type="button" data-wbw-connect disabled={run?.busy} onClick={connectWbw}>Connect seller to WBW</button>}
         <button className="primary" onClick={() => setSellerForm(sellerFormState({ sync: 'off' }))}>+ Add seller</button></>}
         {!admin && current?.name && <button type="button" onClick={() => setIntakeOpen(true)}>{current.intake?.done ? 'Update intake' : 'Finish intake'}</button>}
         {admin && who && <button type="button" onClick={() => act({ action: 'optimize-backfill' })}>Optimize existing</button>}
@@ -351,8 +390,8 @@ export default function Screen({ admin = false }) {
         <a className="src" href="/login" onClick={e => { e.preventDefault(); fetch('/api/login', { method: 'DELETE' }).then(() => location.assign('/login')); }}>Log out</a>
       </div>
       {(admin ? who : true) && <details className="help-fold"><summary>{admin ? 'About approving and export' : 'About your check'}</summary>
-        {!admin && <p className="help">Your job is to double-check each listing before it goes live, including anything shown in yellow. When you approve it, it is published right away. It is marked exported here — WBW is not connected yet, so nothing is sent to the live site.</p>}
-        {admin && <p className="help">When a seller approves a listing, it is published here right away. You can still see and edit every listing. Export CSV is the file for WBW. Nothing is sent to the live site yet.</p>}
+        {!admin && <p className="help">Your job is to double-check each listing before it goes live, including anything shown in yellow. When you approve it, it is published right away. It is marked exported here. Staff can then send it to your connected WBW profile; check the WBW receipt below to see whether it is actually live.</p>}
+        {admin && <p className="help">When a seller approves a listing, it is published here right away. You can still see and edit every listing. Use Send to WBW as drafts or List on WBW to send selected inventory directly to the seller’s WBW profile. List on WBW requires approval and a shipping destination. Export CSV is still available.</p>}
       </details>}
       {admin && current?.intake && <p className={current.intake.done ? 'help line' : 'warn line'}>{intakeLabel(current.intake)}</p>}
       {admin && current?.name && <div className="wbw-seller-status-detail" data-wbw-status-detail><WbwStatusBadges status={current.wbw_status} where="detail" /></div>}
@@ -427,6 +466,13 @@ export default function Screen({ admin = false }) {
           </span>}
           {admin && <button className="primary" onClick={() => bulk({ action: 'approve' })}>Approve selected</button>}
           {admin && live && <button className="primary" onClick={exportCsv}>Export CSV</button>}
+          {admin && ['review', 'published'].includes(tab) && <>
+            <button type="button" data-wbw-send-drafts disabled={run?.busy} onClick={() => sendWbw(false)}>Send to WBW as drafts</button>
+            <label>WBW shipping <select value={wbwShipping} onChange={e => setWbwShipping(e.target.value)} disabled={run?.busy}>
+              <option value="">Choose destination</option><option value="conus">Ships CONUS</option><option value="usa">Ships all USA</option><option value="global">Ships globally</option><option value="pickup">Local pickup only</option>
+            </select></label>
+            <button type="button" className="primary" data-wbw-send-live disabled={run?.busy} onClick={() => sendWbw(true)}>List on WBW</button>
+          </>}
           {live && <button onClick={() => bulk({ action: 'remove' })}>Remove</button>}
           {tab === 'pending' && <button className="primary" onClick={() => bulk({ action: 'sold' })}>Mark sold</button>}
           {tab === 'pending' && <button onClick={() => bulk({ action: 'restore' })}>Still for sale</button>}
@@ -486,6 +532,7 @@ export default function Screen({ admin = false }) {
                 View on {{ facebook: 'Facebook', depop: 'Depop', poshmark: 'Poshmark', ebay: 'eBay' }[i.source] ?? i.source}</a>}
               {i.source === 'listperfectly' && <small>List Perfectly{i.markets ? ` · listed on ${i.markets}` : ''}</small>}
               {i.changed_at && <small className="warn">Changed at source — review before it goes back to WBW</small>}
+              {i.wbw_listing_id && <small data-wbw-receipt>WBW: <a href={`https://westernbootworld.com/listing/${i.wbw_listing_id}`} target="_blank" rel="noopener noreferrer">Pair #{i.wbw_listing_id}</a> · {i.wbw_listing_status} · last confirmed {String(i.wbw_synced_at || "").slice(0, 10)}</small>}
               <small className={ready.ready ? '' : 'warn'} data-export-ready>{ready.ready ? 'Ready for export' : `Export: ${ready.missing.join('; ')}`}</small>
               {i.opt_error && <small className="err">Optimization failed: {i.opt_error}</small>}
               {i.status === 'pending' && <small className="warn">Gone from the source — confirm sold, or it's marked sold in {daysLeft(i)} days</small>}
