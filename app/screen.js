@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CHOICES, displayWidth, searchMatch } from '../lib/vocab';
 import { needsCheck, REQUIRED } from '../lib/publish';
 import { exportReadiness } from '../lib/readiness';
+import { missingFields, unverifiedFields, reviewFieldsComplete, exportReady, selectExportRows, toggleVisibleSelection } from '../lib/review';
 import OptimizePanel from '../components/optimize-panel';
 import { packCsvChunks } from '../lib/csv';
 import { exportFilename, toCsv } from '../lib/export';
@@ -35,16 +36,15 @@ const LABELS = { title: 'Listing title*', wbw_price: 'Asking price', price: 'Sou
   sole: 'Sole', heel: 'Heel', toe: 'Toe', description: 'Description', id_text: 'Model / date codes' };
 const FIELDS = Object.keys(LABELS);
 const label = f => LABELS[f].replace(/\*$/, '');
-const missing = i => REQUIRED.filter(f => !i[f]);
+const missing = missingFields;
 const ALERT = ['width']; // not required, but shown red when empty so the seller knows it isn't there
 const flagged = i => [...missing(i), ...ALERT.filter(f => !i[f])];
-const unverified = i => (i.guessed ?? []).filter(f => i[f]);
-const isReady = i => !missing(i).length && !unverified(i).length;
+const unverified = unverifiedFields;
 const PRESETS = { brand: ['Unbranded', 'Custom'], size: ['Estimated'] }; // one-click values for items that genuinely have none
 // Group header quick filters: Ready, To verify, one per missing required field, and the alert fields.
 const FILTERS = { check: ['Needs a check', needsCheck], approved: ['Approved', i => !needsCheck(i)],
-  ready: ['Ready', isReady], idinfo: ['Has ID info', i => i.id_photos?.length > 0], verify: ['To verify', i => unverified(i).length > 0],
-  ...Object.fromEntries(REQUIRED.map(f => [f, [`Missing ${label(f)}`, i => !i[f]]])),
+  ready: ['Ready to export', exportReady], complete: ['Review fields complete', reviewFieldsComplete], idinfo: ['Has ID info', i => i.id_photos?.length > 0], verify: ['To verify', i => unverified(i).length > 0],
+  ...Object.fromEntries(REQUIRED.map(f => [f, [`Missing ${label(f)}`, i => missing(i).includes(f)]])),
   ...Object.fromEntries(ALERT.map(f => [f, [`No ${label(f).toLowerCase()}`, i => !i[f]]])),
   nogroup: ['No group price', i => !!i.missing_group_price],
   priceflag: ['Price check', i => !!i.price_flag] };
@@ -167,10 +167,9 @@ export default function Screen({ admin = false }) {
   };
   const scan = async () => { for (const id of sel) await api('POST', { id }, '', '/api/idcheck').catch(e => setErr(e.message)); load(); };
   const exportCsv = async () => {
-    const picked = items.filter(i => sel.has(i.id)), rows = picked.filter(i => !needsCheck(i));
-    if (!rows.length) return setErr(picked.length ? 'Nothing selected has the seller\'s approval yet.' : 'Select an approved item first.');
-    const notReady = rows.filter(i => !isReady(i)).length;
-    if (notReady && !confirm(`${notReady} of ${rows.length} approved items aren't ready (missing or unverified fields). Export anyway?`)) return;
+    const { picked, rows, notReady } = selectExportRows(items, sel);
+    if (!rows.length) return setErr(picked.length ? 'Approve the selected items before exporting. Saving verified fields does not approve an item.' : 'Select an approved item first, then choose Export CSV.');
+    if (notReady && !confirm(`${notReady} of ${rows.length} approved items aren't ready (missing listing details, photos, or unverified fields). Export anyway?`)) return;
     const names = current?.brand_context === 'off' ? [] : [...new Set(rows.map(r => r.brand).filter(Boolean))];
     const note = rows.length < picked.length ? `${picked.length - rows.length} still need the seller's check and were left out.` : '';
     download(rows, names.length ? await api('GET', null, `?names=${encodeURIComponent(names)}`, '/api/brand').catch(() => ({})) : {}, current);
@@ -449,6 +448,9 @@ export default function Screen({ admin = false }) {
               return (c > 0 || fk === 'ready' || fk === 'check') && <button key={fk} className={`chip ${fk in LABELS || fk === 'nogroup' ? 'miss' : ''} ${fk === 'check' ? 'miss' : ''} ${filter[k] === fk ? 'on' : ''}`}
                 onClick={() => setFilter({ ...filter, [k]: filter[k] === fk ? null : fk })}>{fl} ({c})</button>; })}
           </h2>
+          {visible.length > 0 && <button type="button" className="group-select" onClick={() => setSel(s => toggleVisibleSelection(s, visible))}>
+            {visible.every(i => sel.has(i.id)) ? 'Deselect' : 'Select all'} {l.toLowerCase()} ({visible.length})
+          </button>}
           {visible.map(i => {
             const ready = exportReadiness(i);
             const proposal = asObj(i.opt_proposal);
@@ -469,9 +471,10 @@ export default function Screen({ admin = false }) {
                   : <input list={CHOICES[f] && `dl-${f}`} value={(f === 'width' ? displayWidth(edit[f]) : edit[f]) ?? ''} onChange={setField(f)} />}</label>)}
               {i.missing_group_price && <small className="err">Missing group price — spreadsheet price kept</small>}
               {i.opt_error && <small className="err">Optimization failed: {i.opt_error}</small>}
+              {needsCheck(i) && <p className="warn">Save verified fields to keep your edits. Choose {admin ? 'Approve for seller' : 'Approve'} to finish review. Approval does not send this item to Western Boot World; staff export and import a CSV separately.</p>}
               {i.status === 'published' && <Share item={i} seller={current} reload={load} />}
-              <span><button className="primary" onClick={save}>Save (marks all verified)</button>
-                {needsCheck(i) && <button type="button" className="primary" onClick={() => approve(i)}>{admin ? 'Approve for seller' : 'Approve / ready to go live'}</button>}
+              <span><button className="primary" onClick={save}>Save verified fields</button>
+                {needsCheck(i) && <button type="button" className="primary" onClick={() => approve(i)}>{admin ? 'Approve for seller' : 'Approve'}</button>}
                 <button type="button" data-prepare-optimize disabled={optBusy} onClick={() => prepareOpt(i)}>{optBusy ? 'Optimizing…' : 'Optimize'}</button>
                 <button onClick={() => setEdit(null)}>Cancel</button></span>
               {!admin && i.approved_at && <small className="warn">Saving changes takes it off the exported list until you approve it again.</small>}
@@ -486,14 +489,14 @@ export default function Screen({ admin = false }) {
                 View on {{ facebook: 'Facebook', depop: 'Depop', poshmark: 'Poshmark', ebay: 'eBay' }[i.source] ?? i.source}</a>}
               {i.source === 'listperfectly' && <small>List Perfectly{i.markets ? ` · listed on ${i.markets}` : ''}</small>}
               {i.changed_at && <small className="warn">Changed at source — review before it goes back to WBW</small>}
-              <small className={ready.ready ? '' : 'warn'} data-export-ready>{ready.ready ? 'Ready for export' : `Export: ${ready.missing.join('; ')}`}</small>
+              {exportReady(i) ? <small data-export-ready>Ready for export</small> : !ready.ready && <small className="warn" data-export-ready>Export: {ready.missing.join('; ')}</small>}
               {i.opt_error && <small className="err">Optimization failed: {i.opt_error}</small>}
               {i.status === 'pending' && <small className="warn">Gone from the source — confirm sold, or it's marked sold in {daysLeft(i)} days</small>}
               {i.source_condition && <small>Source condition: {i.source_condition}</small>}
               {i.boot === 'unsure' && <small>{Math.round((i.boot_score ?? 0) * 100)}% likely a boot</small>}
               {missing(i).length > 0 && <small className="err">Missing: {missing(i).map(label).join(', ')}</small>}
               {unverified(i).length > 0 && <small className="warn">Verify: {unverified(i).map(label).join(', ')}</small>}
-              {needsCheck(i) ? <small className="err">{admin ? "Needs the seller's check" : 'Needs your check'}</small> : <small>Approved by {i.approved_by} on {String(i.approved_at).slice(0, 10)}</small>}
+              {needsCheck(i) ? <small className="warn">{reviewFieldsComplete(i) ? 'Review fields complete. Approval is still required to export.' : 'Review the flagged fields, then approve to export.'}</small> : <small>Approved by {i.approved_by} on {String(i.approved_at).slice(0, 10)}</small>}
               {i.price_flag && <small className={i.price_flag.direction === 'high' ? 'err' : 'warn'} data-price-flag>Price {i.price_flag.direction} vs {i.price_flag.label}: median ${Number(i.price_flag.median).toFixed(2)} (n={i.price_flag.count}). Price was not changed.</small>}
               {maker?.name && <div className="brand-details" data-brand-details><strong>Brand details</strong> {maker.name}{maker.location && maker.location.toLowerCase() !== 'location not documented' ? ` · ${maker.location}` : ''}{maker.blurb ? ` · ${maker.blurb}` : ''}</div>}
               {styleHit && <small data-style-match>Exact style {styleHit.style_number}</small>}
@@ -512,7 +515,7 @@ export default function Screen({ admin = false }) {
               {i.description && <p className="desc">{i.description}</p>}
               <small>Tap to edit</small>
               <span>
-                {needsCheck(i) && <button type="button" className="primary" onClick={e => { e.stopPropagation(); approve(i); }}>{admin ? 'Approve for seller' : 'Approve / ready to go live'}</button>}
+                {needsCheck(i) && <button type="button" className="primary" onClick={e => { e.stopPropagation(); approve(i); }}>{admin ? 'Approve for seller' : 'Approve'}</button>}
                 <button type="button" className="primary" data-prepare-optimize disabled={optBusy} onClick={e => { e.stopPropagation(); prepareOpt(i); }}>{optBusy ? 'Optimizing…' : 'Optimize'}</button>
               </span>
             </div>}
@@ -554,6 +557,7 @@ label{display:flex;flex-direction:column;font-size:14px;color:#4a3d31;gap:4px}
 .bar{position:sticky;top:0;padding:8px 0;background:#faf8f5;z-index:1}.bar label{flex-direction:row;align-items:center;gap:6px;font-size:16px;color:#2b2118}
 .adj{display:flex;gap:4px;flex-wrap:wrap}.adj input{width:90px}
 h2{font-size:16px;margin:16px 0 8px;color:#4a3d31;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.group-select{margin-bottom:8px}
 .chip{font-size:13px;padding:4px 8px;border-radius:12px}.chip.miss{color:#a3261b;border-color:#e3b3ad}.chip.on{background:#1f6f6b;border-color:#1f6f6b;color:#fff}
 .item{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;padding:12px;background:#fff;border:1px solid #e6dfd6;border-radius:8px;margin-bottom:10px}
 .opt{flex:1 0 100%;display:flex;flex-direction:column;gap:8px;border-top:1px solid #e6dfd6;padding-top:8px}
